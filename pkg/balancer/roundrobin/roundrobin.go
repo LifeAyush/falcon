@@ -8,7 +8,6 @@ import (
 	"github.com/LifeAyush/falcon/pkg/dynamic"
 )
 
-// Individual roundrobin balancer for each route
 type roundrobin struct {
 	Servers []*balancer.Server
 	next    uint32
@@ -16,20 +15,33 @@ type roundrobin struct {
 
 func NewBalancer(urls []*url.URL, varNames []string) *roundrobin {
 	rr := &roundrobin{}
-
 	for i := 0; i < len(urls); i++ {
-		rr.AddServer(urls[i], varNames[i])
+		name := ""
+		if i < len(varNames) {
+			name = varNames[i]
+		}
+		rr.AddServer(urls[i], name)
 	}
 	return rr
 }
 
 func (rr *roundrobin) Next() *balancer.Server {
-	n := atomic.AddUint32(&rr.next, 1)
-	return rr.Servers[(int(n)-1)%len(rr.Servers)]
+	n := len(rr.Servers)
+	if n == 0 {
+		return nil
+	}
+	for i := 0; i < n; i++ {
+		idx := atomic.AddUint32(&rr.next, 1)
+		s := rr.Servers[int(idx-1)%n]
+		if !s.GetIsDead() {
+			return s
+		}
+	}
+	return nil
 }
 
-func (rr *roundrobin) AddServer(url *url.URL, varName string) {
-	srv := &balancer.Server{URL: url}
+func (rr *roundrobin) AddServer(u *url.URL, varName string) {
+	srv := &balancer.Server{URL: u}
 	if varName != "" {
 		dynamic.DyServers[varName] = srv
 	}
@@ -42,16 +54,4 @@ func (rr *roundrobin) GetServers() []*balancer.Server {
 
 func (rr *roundrobin) CountServers() int {
 	return len(rr.Servers)
-}
-
-func (rr *roundrobin) SetDead(s *balancer.Server, d bool) {
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
-	s.IsDead = d
-}
-
-func (rr *roundrobin) GetIsDead(s *balancer.Server) bool {
-	s.Mu.RLock()
-	defer s.Mu.RUnlock()
-	return s.IsDead
 }

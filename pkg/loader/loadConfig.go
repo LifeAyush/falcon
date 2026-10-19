@@ -5,11 +5,14 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/LifeAyush/falcon/pkg/balancer"
 	"github.com/LifeAyush/falcon/pkg/balancer/random"
 	"github.com/LifeAyush/falcon/pkg/balancer/roundrobin"
+	"github.com/LifeAyush/falcon/pkg/balancer/wroundrobin"
+	"github.com/LifeAyush/falcon/pkg/constraints"
+	"github.com/LifeAyush/falcon/pkg/constraints/status"
 	"github.com/LifeAyush/falcon/pkg/dynamic"
+	"github.com/LifeAyush/falcon/pkg/health"
 	"github.com/LifeAyush/falcon/pkg/parsing"
 	"github.com/LifeAyush/falcon/pkg/utils"
 )
@@ -45,22 +48,46 @@ var (
 
 func loadConfig() error {
 	config := parsing.GetConfig()
+	_ = status.Init()
 
 	if config.LimitReq.Enable {
 		LimitReqCache = utils.NewECache(time.Millisecond * time.Duration(config.LimitReq.Interval))
+		constraints.InitLimitCache(LimitReqCache)
 	}
 
+	Routes = nil
 	proxyConfig := config.Proxy
-	for _, routeConfig := range proxyConfig.Routes {
-		routeInfo := getRouteInfo(&routeConfig)
+	var allServers []*balancer.Server
+	for i := range proxyConfig.Routes {
+		routeInfo := getRouteInfo(&proxyConfig.Routes[i])
 		Routes = append(Routes, routeInfo)
+		if routeInfo.IsMultiTarget {
+			allServers = append(allServers, routeInfo.Balancer.GetServers()...)
+		} else if routeInfo.TargetServer != nil {
+			allServers = append(allServers, routeInfo.TargetServer)
+		}
 	}
+
+	interval := time.Duration(config.Core.HealthIntervalMs) * time.Millisecond
+	timeout := time.Duration(config.Core.HealthTimeoutMs) * time.Millisecond
+	health.StartProbes(allServers, interval, timeout)
 
 	return nil
 }
 
-func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
+// NewBalancerForRoute selects a balancer implementation (exported for tests).
+func NewBalancerForRoute(bt BalancerType, urls []*url.URL, varNames []string, weights []uint32) balancer.Balancer {
+	switch bt {
+	case RandomBalancer:
+		return random.NewBalancer(urls, varNames)
+	case WRoundRobinBalancer:
+		return wroundrobin.NewBalancer(urls, varNames, weights)
+	default:
+		return roundrobin.NewBalancer(urls, varNames)
+	}
+}
 
+func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
 	routeInfo := new(RouteInfo)
 
 	if len(routeConfig.Backends) == 0 {
@@ -72,11 +99,14 @@ func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
 
 	if len(routeConfig.Backends) == 1 {
 		routeInfo.IsMultiTarget = false
-		url, err := url.Parse(routeConfig.Backends[0].Url)
+		u, err := url.Parse(routeConfig.Backends[0].Url)
 		if err != nil {
 			log.Fatal(err)
 		}
-		routeInfo.TargetServer = &balancer.Server{URL: url}
+		routeInfo.TargetServer = &balancer.Server{
+			URL:        u,
+			HealthPath: routeConfig.Backends[0].HealthPath,
+		}
 		if routeConfig.Backends[0].VarName != "" {
 			dynamic.DyServers[routeConfig.Backends[0].VarName] = routeInfo.TargetServer
 		}
@@ -84,24 +114,30 @@ func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
 	}
 
 	routeInfo.IsMultiTarget = true
-	urls := make([]*url.URL, 0)
-	varNames := make([]string, 0)
+	urls := make([]*url.URL, 0, len(routeConfig.Backends))
+	varNames := make([]string, 0, len(routeConfig.Backends))
+	weights := make([]uint32, 0, len(routeConfig.Backends))
+	healthPaths := make([]string, 0, len(routeConfig.Backends))
 	for _, b := range routeConfig.Backends {
-		curUrl, err := url.Parse(b.Url)
+		curURL, err := url.Parse(b.Url)
 		if err != nil {
 			log.Fatal(err)
 		}
-		urls = append(urls, curUrl)
+		urls = append(urls, curURL)
 		varNames = append(varNames, b.VarName)
+		wt := b.Weight
+		if wt < 1 {
+			wt = 1
+		}
+		weights = append(weights, wt)
+		healthPaths = append(healthPaths, b.HealthPath)
 	}
 
-	switch BalancerType(routeConfig.Balancer) {
-	case RandomBalancer:
-		routeInfo.Balancer = random.NewBalancer(urls, varNames)
-	case RoundRobinBalancer:
-		routeInfo.Balancer = roundrobin.NewBalancer(urls, varNames)
-	case WRoundRobinBalancer:
-		routeInfo.Balancer = roundrobin.NewBalancer(urls, varNames)
+	routeInfo.Balancer = NewBalancerForRoute(BalancerType(routeConfig.Balancer), urls, varNames, weights)
+	for i, s := range routeInfo.Balancer.GetServers() {
+		if i < len(healthPaths) {
+			s.HealthPath = healthPaths[i]
+		}
 	}
 
 	return routeInfo
@@ -109,13 +145,18 @@ func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
 
 func (routeInfo *RouteInfo) GetTargetServer() *balancer.Server {
 	if !routeInfo.IsMultiTarget {
+		if routeInfo.TargetServer != nil && routeInfo.TargetServer.GetIsDead() {
+			return nil
+		}
 		return routeInfo.TargetServer
 	}
 	return routeInfo.Balancer.Next()
 }
 
-func init() {
-	loadConfig()
-	log.Println("Loaded Configs : ")
-	spew.Dump(Routes)
+// Load reads the configured TOML file and builds routes. Call once at process start.
+func Load() {
+	if err := loadConfig(); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("Loaded %d routes", len(Routes))
 }

@@ -5,10 +5,9 @@ import (
 	"sync"
 
 	"github.com/BurntSushi/toml"
-	"github.com/davecgh/go-spew/spew"
 )
 
-// The configuration struct of config.toml
+// Config is the root TOML configuration.
 type Config struct {
 	Core     Core     `toml:"core"`
 	LimitReq LimitReq `toml:"limitReq"`
@@ -23,6 +22,8 @@ type Core struct {
 	WriteTimeout      int  `toml:"writeTimeout"`
 	IdleTimeout       int  `toml:"idleTimeout"`
 	EnableServerStats bool `toml:"enableServerStats"`
+	HealthIntervalMs  int  `toml:"healthIntervalMs"`
+	HealthTimeoutMs   int  `toml:"healthTimeoutMs"`
 }
 
 type LimitReq struct {
@@ -44,8 +45,10 @@ type Route struct {
 }
 
 type Backend struct {
-	Url     string `toml:"url"`
-	VarName string `toml:"varName"`
+	Url        string `toml:"url"`
+	VarName    string `toml:"varName"`
+	Weight     uint32 `toml:"weight"`
+	HealthPath string `toml:"healthPath"`
 }
 
 type File struct {
@@ -62,18 +65,18 @@ func init() {
 	ConfigFile = new(File)
 }
 
-const fileName = "config.toml"
-
 func GetConfig() *Config {
 	once.Do(func() {
-		// curDir, _ := os.Getwd()
-		// filePath := filepath.Join(curDir, "bin", "config", "config.toml")
-
 		_, err := toml.DecodeFile(ConfigFile.FilePath, &config)
 		if err != nil {
 			log.Fatal(err)
 		}
-		spew.Dump(config, "\n")
 	})
 	return &config
+}
+
+// DecodeConfigFile loads config from path (for tests). Resets once so it can be called again.
+func ResetForTest() {
+	once = sync.Once{}
+	config = Config{}
 }
