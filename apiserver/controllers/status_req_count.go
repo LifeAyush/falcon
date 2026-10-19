@@ -10,7 +10,10 @@ import (
 )
 
 func StatusReqCount(w http.ResponseWriter, r *http.Request) {
-	err := common.Report(w, resultcodes.SUCCESS, "success", common.H{"count": status.Instance().GetReqCount()})
+	err := common.Report(w, resultcodes.SUCCESS, "success", common.H{
+		"inFlight": status.Instance().GetReqCount(),
+		"count":    status.Instance().GetReqCount(), // alias for older clients
+	})
 	if err != nil {
 		fmt.Println(err)
 	}

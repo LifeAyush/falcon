@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/LifeAyush/falcon/apiserver/router"
 	"github.com/LifeAyush/falcon/pkg/parsing"
+	"github.com/gorilla/mux"
 )
 
 func Run() *http.Server {

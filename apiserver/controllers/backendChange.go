@@ -3,7 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 
@@ -18,41 +18,26 @@ type Change struct {
 }
 
 func BackendChange(w http.ResponseWriter, r *http.Request) {
-
 	var change Change
-	var success bool
+	success := false
 
-	body, err1 := ioutil.ReadAll(r.Body)
-
+	body, err1 := io.ReadAll(r.Body)
 	if err1 != nil {
 		fmt.Println(err1)
+	} else if err := json.Unmarshal(body, &change); err != nil {
+		fmt.Println(err)
+	} else if srv, ok := dynamic.DyServers[change.VarName]; !ok {
 		success = false
+	} else if parsedURL, err := url.Parse(change.Url); err != nil {
+		fmt.Println(err)
 	} else {
-		err := json.Unmarshal(body, &change)
-		if err != nil {
-			fmt.Println(err)
-			success = false
-		} else {
-			srv, ok := dynamic.DyServers[change.VarName]
-			if !ok {
-				success = false
-			} else {
-				parsedUrl, err := url.Parse(change.Url)
-				if err != nil {
-					fmt.Println(err)
-					success = false
-				} else {
-					srv.Mu.Lock()
-					srv.URL = parsedUrl
-					srv.Mu.Unlock()
-					success = true
-				}
-			}
-		}
+		srv.Mu.Lock()
+		srv.URL = parsedURL
+		srv.Mu.Unlock()
+		success = true
 	}
 
-	err2 := common.Report(w, resultcodes.SUCCESS, "success", common.H{"success": success})
-	if err2 != nil {
+	if err2 := common.Report(w, resultcodes.SUCCESS, "success", common.H{"success": success}); err2 != nil {
 		fmt.Println(err2)
 	}
 }

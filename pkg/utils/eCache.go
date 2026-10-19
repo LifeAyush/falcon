@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// ephemeral-cache -- stays temporarily for some time
-
 type timeKey struct {
 	inTime time.Time
 	key    string
@@ -17,17 +15,17 @@ type ECache struct {
 	keyQueue *list.List
 	repeats  map[string]int
 	datas    map[string]int
-	mu       *sync.Mutex
+	mu       sync.Mutex
 	ttl      time.Duration
 }
 
 func NewECache(ttl time.Duration) *ECache {
-	ec := new(ECache)
-	ec.datas = make(map[string]int)
-	ec.repeats = make(map[string]int)
-	ec.keyQueue = list.New()
-	ec.mu = new(sync.Mutex)
-	return ec
+	return &ECache{
+		datas:    make(map[string]int),
+		repeats:  make(map[string]int),
+		keyQueue: list.New(),
+		ttl:      ttl,
+	}
 }
 
 func (ec *ECache) Set(key string, data int) {
@@ -37,21 +35,11 @@ func (ec *ECache) Set(key string, data int) {
 
 	_, exist := ec.datas[key]
 	ec.datas[key] = data
-	tkey := timeKey{
-		inTime: time.Now(),
-		key:    key,
-	}
-	ec.keyQueue.PushBack(tkey)
+	ec.keyQueue.PushBack(timeKey{inTime: time.Now(), key: key})
 
 	if exist {
-		val, ok := ec.repeats[key]
-		if ok {
-			ec.repeats[key] = val + 1
-		} else {
-			ec.repeats[key] = 1
-		}
+		ec.repeats[key]++
 	}
-
 }
 
 func (ec *ECache) Get(key string) (int, bool) {
@@ -69,15 +57,8 @@ func (ec *ECache) Len() int {
 	return len(ec.datas)
 }
 
-func (ec *ECache) Update() {
-	ec.mu.Lock()
-	defer ec.mu.Unlock()
-	ec.refresh()
-}
-
-// removes the expired items
 func (ec *ECache) refresh() {
-	if ec.keyQueue.Len() == 0 {
+	if ec.ttl <= 0 || ec.keyQueue.Len() == 0 {
 		return
 	}
 	for {
@@ -86,20 +67,17 @@ func (ec *ECache) refresh() {
 			return
 		}
 		tKey := item.Value.(timeKey)
-		if time.Now().Sub(tKey.inTime) > ec.ttl {
-			ec.keyQueue.Remove(item)
-			if val, ok := ec.repeats[tKey.key]; !ok {
-				delete(ec.datas, tKey.key)
-			} else {
-				if val <= 1 {
-					delete(ec.repeats, tKey.key)
-				} else {
-					ec.repeats[tKey.key] = val - 1
-				}
-			}
-			continue
-		} else {
+		if time.Since(tKey.inTime) <= ec.ttl {
 			break
+		}
+		ec.keyQueue.Remove(item)
+		if val, ok := ec.repeats[tKey.key]; !ok {
+			delete(ec.datas, tKey.key)
+		} else if val <= 1 {
+			delete(ec.repeats, tKey.key)
+			delete(ec.datas, tKey.key)
+		} else {
+			ec.repeats[tKey.key] = val - 1
 		}
 	}
 }

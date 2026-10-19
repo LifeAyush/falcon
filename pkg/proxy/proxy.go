@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/LifeAyush/falcon/pkg/balancer"
 	"github.com/LifeAyush/falcon/pkg/constraints"
 	"github.com/LifeAyush/falcon/pkg/constraints/status"
@@ -18,15 +17,13 @@ import (
 	"golang.org/x/net/netutil"
 )
 
-type Proxy struct {
-}
+type Proxy struct{}
 
 func (p *Proxy) ServeHTTP(res http.ResponseWriter, req *http.Request) {
-	spew.Dump(req.URL.Path, req.URL.Host)
-
 	if parsing.GetConfig().LimitReq.Enable {
 		ip := strings.Split(req.RemoteAddr, ":")[0]
 		if constraints.ExceededLimitReq(ip, req) {
+			http.Error(res, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
 	}
@@ -40,8 +37,6 @@ func (p *Proxy) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	existRoute := false
 
 	for _, r := range loader.Routes {
-		spew.Dump("req url path", req.URL.Path)
-		spew.Dump("route endpoint", r.Endpoint)
 		switch r.Match {
 		case loader.ExactMatch:
 			if req.URL.Path == r.Endpoint {
@@ -61,12 +56,19 @@ func (p *Proxy) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	spew.Dump(existRoute, route)
-
-	if existRoute {
-		proxy := newHostReverseProxy(route.GetTargetServer())
-		proxy.ServeHTTP(res, req)
+	if !existRoute {
+		http.NotFound(res, req)
+		return
 	}
+
+	target := route.GetTargetServer()
+	if target == nil {
+		http.Error(res, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+
+	proxy := newHostReverseProxy(target)
+	proxy.ServeHTTP(res, req)
 }
 
 func singleJoiningSlash(a, b string) string {
@@ -82,15 +84,13 @@ func singleJoiningSlash(a, b string) string {
 }
 
 func newHostReverseProxy(server *balancer.Server) *httputil.ReverseProxy {
-	spew.Dump(server)
 	director := func(req *http.Request) {
-		targetQuery := server.URL.RawQuery
-		req.URL.Scheme = server.URL.Scheme
-		req.URL.Host = server.URL.Host
-		req.URL.Path = singleJoiningSlash(server.URL.Path, req.URL.Path)
-		req.Host = server.URL.Host
-
-		spew.Dump(req.URL.Scheme, req.URL.Host, req.URL.Path)
+		target := server.GetURL()
+		targetQuery := target.RawQuery
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.URL.Path = singleJoiningSlash(target.Path, req.URL.Path)
+		req.Host = target.Host
 
 		if targetQuery == "" || req.URL.RawQuery == "" {
 			req.URL.RawQuery = targetQuery + req.URL.RawQuery
@@ -110,7 +110,6 @@ func newHostReverseProxy(server *balancer.Server) *httputil.ReverseProxy {
 
 type GateServer struct{}
 
-// proxy80 -- http , proxy443 -- https (Not implemented now), proxyws -- websocket (Not implemented untill now)
 func (s *GateServer) proxy80() *http.Server {
 	port := parsing.GetConfig().Core.Listen
 	if port == 0 {
@@ -126,7 +125,7 @@ func (s *GateServer) proxy80() *http.Server {
 	}
 
 	p := &Proxy{}
-	srv := &http.Server{Addr: ":80", Handler: p}
+	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: p}
 	if parsing.GetConfig().Core.ReadTimeout > 0 {
 		srv.ReadTimeout = time.Duration(parsing.GetConfig().Core.ReadTimeout) * time.Second
 	}
@@ -146,8 +145,6 @@ func (s *GateServer) proxy80() *http.Server {
 }
 
 func (s *GateServer) Run() []*http.Server {
-	servers := make([]*http.Server, 0)
-	p80 := s.proxy80()
-	servers = append(servers, p80)
-	return servers
+	loader.Load()
+	return []*http.Server{s.proxy80()}
 }
