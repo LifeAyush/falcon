@@ -1,142 +1,88 @@
-# 🦅 Falcon : A dynamic reverse-proxy
+# Falcon
 
-A dynamic reverse-proxy server built using Go which can be used as Load Balancer and API Gateway.
+L7 reverse proxy and API gateway in Go. Route traffic across backends with round-robin, random, or weighted round-robin balancing, change backend URLs at runtime, and optionally rate-limit and health-check upstreams.
 
-[![MIT License](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://choosealicense.com/licenses/mit/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/LifeAyush/falcon.svg)](https://pkg.go.dev/github.com/LifeAyush/falcon)
-
-## Contents
-
-- [Installation](#installation)
-- [Features](#features)
-- [Configuration](#configuration)
-- [API reference](#api-reference)
-- [License](#license)
-
-## Installation
-
-Falcon can be installed directly via go install. To install the latest version:
+## Install
 
 ```bash
-  go install github.com/LifeAyush/falcon@latest
+go install github.com/LifeAyush/falcon@latest
 ```
 
-To install a specific release:
+Or from a clone:
 
 ```bash
-  go install github.com/LifeAyush/falcon@v1.0.0
+go build -o bin/falcon .
+./bin/falcon -config=/absolute/path/to/config.toml
 ```
 
-## Running Falcon
+Requires Go 1.22+.
 
-To start the proxy-server run :
+## Quick demo (Docker)
 
 ```bash
-  falcon -config=<configFilePath>
+cd demo
+docker compose up --build
 ```
 
-## Features
+Then:
 
-- L7 Load balancing
-- Rate Limiting
-- Dynamic Backend URLs
-- Can be used as an API Gateway
+```bash
+# round-robin across backend-a/b/c
+for i in 1 2 3 4 5 6; do curl -s http://localhost:8000/; done
+
+# in-flight request count (when enableServerStats=true)
+curl -s http://localhost:9900/apiStatus/reqCount
+
+# point named backend "a" at backend-c
+curl -s -X POST http://localhost:9900/apiStatus/backendChange \
+  -H 'Content-Type: application/json' \
+  -d '{"varName":"a","url":"http://backend-c:8080"}'
+```
 
 ## Configuration
 
-The config file is in bin/config/config.toml
-Refer to [TOML Specificataion](https://toml.io/en/).
+See [`bin/config/config.toml`](bin/config/config.toml) and the [TOML](https://toml.io/) spec.
 
-```toml
-# the main configs of the reverse-proxy
-[core]
+| Field | Meaning |
+| --- | --- |
+| `core.listen` | Proxy listen port (default 80) |
+| `core.apiport` | Management API port (default 9900) |
+| `core.enableServerStats` | Track in-flight requests; exposes `GET /apiStatus/reqCount` |
+| `core.healthIntervalMs` / `healthTimeoutMs` | Active health-check cadence |
+| `limitReq.enable` / `interval` / `frequency` | Per-IP+path rate limit window (ms) and max requests |
+| `proxy.routes[].match` | `0` exact, `1` prefix, `2` regex |
+| `proxy.routes[].balancer` | `0` round-robin, `1` random, `2` weighted round-robin |
+| `proxy.routes[].backends[].weight` | Weight for balancer `2` (default 1) |
+| `proxy.routes[].backends[].varName` | Register for runtime URL changes |
+| `proxy.routes[].backends[].healthPath` | Path probed on the backend (e.g. `/health`) |
 
-# the port where reverse-proxy will listen
-# default 80
-listen=8000
+HTTPS termination and WebSocket proxying are not implemented.
 
-# the port where the server api will listen
-# refer to the below api reference section
-# default 9900
-apiport=9900
+## Management API
 
-# Enable server stats route
-# default - false
-enableServerStats=false
+**Change a backend URL** (`POST /apiStatus/backendChange`):
 
-# The maximum connections that the reverse-proxy will allow at a particular time
-# 0 is infinite
-limitMaxConn=0
-
-# if it is 0, there is no timeout, in seconds
-readTimeout=0
-
-# if it is 0, there is no timeout, in seconds
-writeTimeout=0
-
-# if it is 0, there is no timeout, in seconds
-idleTimeout=0
-
-# enable this to implement rate limiting
-[limitReq]
-enable=false
-# in millisecond
-interval=1000
-frequency=100
-
-# config of proxy
-[proxy]
-
-[[proxy.routes]]
-endpoint="/hello"
-# match (specifies how routes are mathed to the incoming request)
-# match - [0 - exact, 1 - prefix, 2 - regex ]
-# default - exact
-match=1
-# balancer (specifies which load balancing algo to be used in case of multiple backends)
-# balancer - [0 - roundrobin, 1 - random, 2 - weighted-roundrobin ]
-balancer=0
-
-[[proxy.routes.backends]]
-# url should be in proper format <schema>://<host>:<port>
-url="http://localhost:3000"
-
-
-# Add varName to enable dynamically changing urls of the particular backend
-# varNames for all the backends should be unique othewise only the last backend 
-# specified with a particular varName will be dynamic
-varName="x1"
-
-
-[[proxy.routes]]
-endpoint="/world"
-match=1
-
-[[proxy.routes.backends]]
-url="http://localhost:3005"
-
-
+```json
+{"varName": "hello_a", "url": "http://127.0.0.1:3009"}
 ```
 
-## API Reference
+**In-flight requests** (`GET /apiStatus/reqCount`, only if `enableServerStats=true`):
 
-#### Get current requests handled at this moment
-
-```bash
-  GET <proxyHostName>:9900/apiStatus/reqCount
+```json
+{"code":0,"msg":"success","body":{"inFlight":2,"count":2}}
 ```
 
-#### Dynamically update the backend url
+`count` is an alias of `inFlight` (concurrent open proxy requests, not lifetime totals).
 
-```bash
-  POST <proxyHostName>:9900/apiStatus/backendChange
-```
+## Features
 
-| Parameter   | Type       | Description            |
-| :---------- | :--------- | :--------------------- |
-| `varName` | `string` | varName of the backend |
-| `url`     | `string` | the new backendUrl     |
+- L7 reverse proxy / API gateway style routing
+- Round-robin, random, and weighted round-robin balancers
+- Dynamic backend URLs via the management API
+- Optional rate limiting (HTTP 429)
+- Optional active health checks (`healthPath`); dead backends are skipped
+- Optional in-flight request stats
 
 ## License
 
-[MIT](https://choosealicense.com/licenses/mit/)
+[MIT](License.md)
