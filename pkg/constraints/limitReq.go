@@ -1,7 +1,6 @@
 package constraints
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/LifeAyush/falcon/pkg/parsing"
@@ -10,29 +9,35 @@ import (
 
 var limitReqCache *utils.ECache
 
-func getReqCount(key string) int {
-	hashkey := utils.Hash(key)
-	log.Printf("Hashed Key -> %s", hashkey)
-	obj, ok := limitReqCache.Get(hashkey)
-	if ok {
-		count := obj
-		//  wrong here
-		limitReqCache.Set(hashkey, count+1)
-		return count
-	} else {
-		limitReqCache.Set(hashkey, 1)
-	}
-	return 0
+// InitLimitCache wires the shared ephemeral cache used for rate limiting.
+func InitLimitCache(c *utils.ECache) {
+	limitReqCache = c
 }
 
+func getReqCount(key string) int {
+	if limitReqCache == nil {
+		return 0
+	}
+	hashkey := utils.Hash(key)
+	obj, ok := limitReqCache.Get(hashkey)
+	if ok {
+		limitReqCache.Set(hashkey, obj+1)
+		return obj + 1
+	}
+	limitReqCache.Set(hashkey, 1)
+	return 1
+}
+
+// ExceededLimitReq reports whether the client has exceeded the configured frequency.
 func ExceededLimitReq(ip string, req *http.Request) bool {
-	var key string
-	key = ip + req.URL.Path
-	log.Printf("key -> %s", key)
-	count := getReqCount(key)
-	if count >= parsing.GetConfig().LimitReq.Frequency {
-		return true
-	} else {
+	if limitReqCache == nil {
 		return false
 	}
+	key := ip + req.URL.Path
+	count := getReqCount(key)
+	freq := parsing.GetConfig().LimitReq.Frequency
+	if freq <= 0 {
+		return false
+	}
+	return count > freq
 }

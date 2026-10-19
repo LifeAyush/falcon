@@ -4,25 +4,30 @@ import (
 	"sync"
 )
 
-var status *Status
+var (
+	instance     *Status
+	instanceOnce sync.Once
+)
 
 type Status struct {
 	ReqCount   int
-	ReqCountMu *sync.RWMutex
+	ReqCountMu sync.RWMutex
 }
 
-// can also use atomic Adduint32 or something else
+func ensure() *Status {
+	instanceOnce.Do(func() {
+		instance = &Status{}
+	})
+	return instance
+}
 
 func Init() error {
-	status = &Status{
-		ReqCount:   0,
-		ReqCountMu: new(sync.RWMutex),
-	}
+	_ = ensure()
 	return nil
 }
 
 func Instance() *Status {
-	return status
+	return ensure()
 }
 
 func (sta *Status) AddReqCount() {
@@ -33,7 +38,9 @@ func (sta *Status) AddReqCount() {
 
 func (sta *Status) SubReqCount() {
 	sta.ReqCountMu.Lock()
-	sta.ReqCount--
+	if sta.ReqCount > 0 {
+		sta.ReqCount--
+	}
 	sta.ReqCountMu.Unlock()
 }
 
