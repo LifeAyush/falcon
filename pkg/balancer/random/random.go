@@ -8,26 +8,46 @@ import (
 	"github.com/LifeAyush/falcon/pkg/dynamic"
 )
 
-// Individual roundrobin balancer for each route
 type random struct {
 	Servers []*balancer.Server
+	rng     *rand.Rand
 }
 
 func NewBalancer(urls []*url.URL, varNames []string) *random {
-	rr := &random{}
+	return NewBalancerWithRand(urls, varNames, rand.New(rand.NewSource(rand.Int63())))
+}
 
+func NewBalancerWithRand(urls []*url.URL, varNames []string, rng *rand.Rand) *random {
+	rr := &random{rng: rng}
 	for i := 0; i < len(urls); i++ {
-		rr.AddServer(urls[i], varNames[i])
+		name := ""
+		if i < len(varNames) {
+			name = varNames[i]
+		}
+		rr.AddServer(urls[i], name)
 	}
 	return rr
 }
 
 func (rr *random) Next() *balancer.Server {
-	return rr.Servers[rand.Int()%len(rr.Servers)]
+	n := len(rr.Servers)
+	if n == 0 {
+		return nil
+	}
+	alive := make([]*balancer.Server, 0, n)
+	for _, s := range rr.Servers {
+		if !s.GetIsDead() {
+			alive = append(alive, s)
+		}
+	}
+	if len(alive) == 0 {
+		return nil
+	}
+	return alive[rr.rng.Intn(len(alive))]
 }
 
-func (rr *random) AddServer(url *url.URL, varName string) {
-	srv := &balancer.Server{URL: url}
+func (rr *random) AddServer(u *url.URL, varName string) {
+	srv := &balancer.Server{URL: u}
 	if varName != "" {
 		dynamic.DyServers[varName] = srv
 	}
@@ -40,16 +60,4 @@ func (rr *random) GetServers() []*balancer.Server {
 
 func (rr *random) CountServers() int {
 	return len(rr.Servers)
-}
-
-func (rr *random) SetDead(s *balancer.Server, d bool) {
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
-	s.IsDead = d
-}
-
-func (rr *random) GetIsDead(s *balancer.Server) bool {
-	s.Mu.RLock()
-	defer s.Mu.RUnlock()
-	return s.IsDead
 }
