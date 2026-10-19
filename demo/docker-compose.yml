@@ -1,0 +1,24 @@
+services:
+  backend-a:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-text=backend-a", "-listen=:8080"]
+
+  backend-b:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-text=backend-b", "-listen=:8080"]
+
+  backend-c:
+    image: hashicorp/http-echo:1.0.0
+    command: ["-text=backend-c", "-listen=:8080"]
+
+  falcon:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    ports:
+      - "8000:8000"
+      - "9900:9900"
+    depends_on:
+      - backend-a
+      - backend-b
+      - backend-c
