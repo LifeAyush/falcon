@@ -1,0 +1,31 @@
+[core]
+listen = 8000
+apiport = 9900
+enableServerStats = true
+healthIntervalMs = 2000
+healthTimeoutMs = 800
+
+[proxy]
+
+[[proxy.routes]]
+endpoint = "/"
+match = 1
+balancer = 0
+
+[[proxy.routes.backends]]
+url = "http://backend-a:8080"
+varName = "a"
+weight = 1
+healthPath = "/health"
+
+[[proxy.routes.backends]]
+url = "http://backend-b:8080"
+varName = "b"
+weight = 1
+healthPath = "/health"
+
+[[proxy.routes.backends]]
+url = "http://backend-c:8080"
+varName = "c"
+weight = 1
+healthPath = "/health"
