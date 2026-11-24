@@ -1,0 +1,15 @@
+[core]
+listen = 8100
+apiport = 9910
+enableServerStats = false
+
+[proxy]
+
+[[proxy.routes]]
+endpoint = "/"
+match = 1
+balancer = 0
+
+[[proxy.routes.backends]]
+url = "http://127.0.0.1:3101"
+weight = 1
