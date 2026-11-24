@@ -1,5 +1,7 @@
 # Falcon
 
+[![ci](https://github.com/LifeAyush/falcon/actions/workflows/ci.yml/badge.svg)](https://github.com/LifeAyush/falcon/actions/workflows/ci.yml)
+
 L7 reverse proxy and API gateway in Go. Route traffic across backends with round-robin, random, or weighted round-robin balancing, change backend URLs at runtime, and optionally rate-limit and health-check upstreams.
 
 ## Install
@@ -86,3 +88,7 @@ HTTPS termination and WebSocket proxying are not implemented.
 ## License
 
 [MIT](License.md)
+
+---
+
+Building something similar, or stuck on proxies, load balancing or gateway routing? Happy to dig in with you: [grab 30 min](https://cal.com/ayush-patil-s2zg3v/30min).
