@@ -17,6 +17,17 @@ import (
 	"golang.org/x/net/netutil"
 )
 
+// upstreamTransport is shared by every proxied request so connections to
+// backends are pooled and reused. http.DefaultTransport keeps only 2 idle
+// connections per host, so under concurrent load nearly every request dialed
+// a new connection and the host ran out of ephemeral ports.
+var upstreamTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns = 1024
+	t.MaxIdleConnsPerHost = 256
+	return t
+}()
+
 type Proxy struct{}
 
 func (p *Proxy) ServeHTTP(res http.ResponseWriter, req *http.Request) {
@@ -105,7 +116,7 @@ func newHostReverseProxy(server *balancer.Server) *httputil.ReverseProxy {
 		xForwarded = append(xForwarded, req.RemoteAddr)
 		req.Header["X-Forwarded-For"] = xForwarded
 	}
-	return &httputil.ReverseProxy{Director: director}
+	return &httputil.ReverseProxy{Director: director, Transport: upstreamTransport}
 }
 
 type GateServer struct{}
