@@ -98,6 +98,8 @@ See [`bin/config/config.toml`](bin/config/config.toml) and the [TOML](https://to
 | `proxy.routes[].backends[].varName` | Register for runtime URL changes |
 | `proxy.routes[].backends[].healthPath` | Path probed on the backend (e.g. `/health`) |
 
+**Route matching rule:** routes are checked in config order and the **first** matching route wins (put more specific routes first). Regex endpoints are compiled once at startup; an invalid regex makes falcon fail at load with an error naming the route.
+
 HTTPS termination and WebSocket proxying are not implemented.
 
 ## Management API
