@@ -1,8 +1,11 @@
 package loader
 
 import (
+	"fmt"
 	"log"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/LifeAyush/falcon/pkg/balancer"
@@ -36,6 +39,7 @@ const (
 type RouteInfo struct {
 	Endpoint      string
 	Match         MatchType
+	Regex         *regexp.Regexp // compiled once at load; set only for RegexMatch routes
 	TargetServer  *balancer.Server
 	IsMultiTarget bool
 	Balancer      balancer.Balancer
@@ -59,7 +63,10 @@ func loadConfig() error {
 	proxyConfig := config.Proxy
 	var allServers []*balancer.Server
 	for i := range proxyConfig.Routes {
-		routeInfo := getRouteInfo(&proxyConfig.Routes[i])
+		routeInfo, err := getRouteInfo(&proxyConfig.Routes[i])
+		if err != nil {
+			return err
+		}
 		Routes = append(Routes, routeInfo)
 		if routeInfo.IsMultiTarget {
 			allServers = append(allServers, routeInfo.Balancer.GetServers()...)
@@ -87,7 +94,7 @@ func NewBalancerForRoute(bt BalancerType, urls []*url.URL, varNames []string, we
 	}
 }
 
-func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
+func getRouteInfo(routeConfig *parsing.Route) (*RouteInfo, error) {
 	routeInfo := new(RouteInfo)
 
 	if len(routeConfig.Backends) == 0 {
@@ -96,6 +103,13 @@ func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
 
 	routeInfo.Endpoint = routeConfig.Endpoint
 	routeInfo.Match = MatchType(routeConfig.Match)
+	if routeInfo.Match == RegexMatch {
+		re, err := regexp.Compile(routeConfig.Endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("route %q: invalid regex endpoint: %w", routeConfig.Endpoint, err)
+		}
+		routeInfo.Regex = re
+	}
 
 	if len(routeConfig.Backends) == 1 {
 		routeInfo.IsMultiTarget = false
@@ -110,7 +124,7 @@ func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
 		if routeConfig.Backends[0].VarName != "" {
 			dynamic.DyServers[routeConfig.Backends[0].VarName] = routeInfo.TargetServer
 		}
-		return routeInfo
+		return routeInfo, nil
 	}
 
 	routeInfo.IsMultiTarget = true
@@ -140,7 +154,20 @@ func getRouteInfo(routeConfig *parsing.Route) *RouteInfo {
 		}
 	}
 
-	return routeInfo
+	return routeInfo, nil
+}
+
+// Matches reports whether the request path matches this route.
+func (routeInfo *RouteInfo) Matches(path string) bool {
+	switch routeInfo.Match {
+	case ExactMatch:
+		return path == routeInfo.Endpoint
+	case PrefixMatch:
+		return strings.HasPrefix(path, routeInfo.Endpoint)
+	case RegexMatch:
+		return routeInfo.Regex != nil && routeInfo.Regex.MatchString(path)
+	}
+	return false
 }
 
 func (routeInfo *RouteInfo) GetTargetServer() *balancer.Server {

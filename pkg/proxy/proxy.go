@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"regexp"
 	"strings"
 	"time"
 
@@ -44,30 +43,16 @@ func (p *Proxy) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		defer status.Instance().SubReqCount()
 	}
 
-	route := new(loader.RouteInfo)
-	existRoute := false
-
+	// First matching route wins, in config order.
+	var route *loader.RouteInfo
 	for _, r := range loader.Routes {
-		switch r.Match {
-		case loader.ExactMatch:
-			if req.URL.Path == r.Endpoint {
-				route = r
-				existRoute = true
-			}
-		case loader.PrefixMatch:
-			if strings.HasPrefix(req.URL.Path, r.Endpoint) {
-				route = r
-				existRoute = true
-			}
-		case loader.RegexMatch:
-			if match, _ := regexp.MatchString(r.Endpoint, req.URL.Path); match {
-				route = r
-				existRoute = true
-			}
+		if r.Matches(req.URL.Path) {
+			route = r
+			break
 		}
 	}
 
-	if !existRoute {
+	if route == nil {
 		http.NotFound(res, req)
 		return
 	}
