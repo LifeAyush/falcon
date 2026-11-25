@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LifeAyush/falcon/pkg/balancer"
@@ -63,8 +64,7 @@ func (p *Proxy) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	proxy := newHostReverseProxy(target)
-	proxy.ServeHTTP(res, req)
+	reverseProxyFor(target).ServeHTTP(res, req)
 }
 
 func singleJoiningSlash(a, b string) string {
@@ -77,6 +77,19 @@ func singleJoiningSlash(a, b string) string {
 		return a + "/" + b
 	}
 	return a + b
+}
+
+// reverseProxies caches one ReverseProxy per backend. The director reads the
+// backend URL on every request, so a URL change made through the management
+// API is picked up without rebuilding the proxy.
+var reverseProxies sync.Map // *balancer.Server -> *httputil.ReverseProxy
+
+func reverseProxyFor(server *balancer.Server) *httputil.ReverseProxy {
+	if rp, ok := reverseProxies.Load(server); ok {
+		return rp.(*httputil.ReverseProxy)
+	}
+	rp, _ := reverseProxies.LoadOrStore(server, newHostReverseProxy(server))
+	return rp.(*httputil.ReverseProxy)
 }
 
 func newHostReverseProxy(server *balancer.Server) *httputil.ReverseProxy {
