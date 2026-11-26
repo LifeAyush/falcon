@@ -70,9 +70,48 @@ Before this benchmark existed, falcon proxied every request through `http.Defaul
 
 The fix is one shared transport with a real connection pool (`MaxIdleConnsPerHost = 256`) in [`pkg/proxy/proxy.go`](pkg/proxy/proxy.go).
 
+### Profiling arc: first-match routing, precompiled routes, proxy reuse
+
+A second round of work removed the three per-request costs named in the first version of this section:
+
+- Route matching stops at the first matching route instead of scanning all of them.
+- Regex routes are compiled once at startup instead of calling `regexp.MatchString` on every request.
+- One `httputil.ReverseProxy` is built per backend instead of one per request.
+
+These numbers come from a different machine than the M4 Pro table above, so the two tables are **not comparable**. Both rows below were measured in this environment, back to back, with `./bench/run.sh` (10 s per run, one run each): 4 vCPU Intel Xeon @ 2.1 GHz, 15 GB RAM, Linux 6.18, Go 1.24.7, nginx 1.24.0 (Ubuntu). The load generator, proxy, backend and nginx all share those 4 vCPUs.
+
+| target | concurrency | req/s | p50 ms | p99 ms | errors |
+|---|---|---|---|---|---|
+| direct to backend | 50 | 62,124 | 0.56 | 4.02 | 0 |
+| nginx | 50 | 37,542 | 0.97 | 5.72 | 0 |
+| **falcon, after** | 50 | **12,937** | 3.52 | 10.56 | **0** |
+| falcon, before (commit `5fe30b4`) | 50 | 12,697 | 3.55 | 10.85 | 0 |
+| direct to backend | 200 | 67,486 | 2.27 | 11.94 | 0 |
+| nginx | 200 | 39,801 | 3.81 | 20.04 | 0 |
+| **falcon, after** | 200 | **17,985** | 10.04 | 29.60 | **0** |
+| falcon, before (commit `5fe30b4`) | 200 | 17,539 | 10.38 | 29.41 | 0 |
+
+The "before" rows are the pre-arc code run through the same script right before the "after" rows. falcon improved by about 2% at both concurrency levels, which is the size of run-to-run noise on a shared 4-vCPU box, so treat it as "no measurable change in throughput" rather than a win. With a single backend and a single `/` route there was little route scanning or regex work to remove in the first place; the changes mainly reduce per-request allocations (see the `ServeHTTP` benchmark in `pkg/proxy`). falcon is still at about 45% of nginx's throughput at concurrency 200 on this machine.
+
 ### Where the remaining gap to nginx is
 
-Not tuned yet, and the next things to profile: a new `httputil.ReverseProxy` is allocated per request, regex routes call `regexp.MatchString` (which compiles the pattern) on every request, and route matching scans every route instead of stopping at the first match.
+A 10 s CPU profile of falcon at concurrency 200 (via the opt-in pprof endpoint below; 18.6 s of samples across 4 vCPUs) shows that the time is not in falcon's own code. `Proxy.ServeHTTP` is 26.6% of samples cumulatively and `httputil.ReverseProxy.ServeHTTP` inside it is 26.4%, so route matching and balancing are effectively free now. Percentages are cumulative and overlap.
+
+1. **Allocation and GC: 30.7% in `runtime.mallocgc`**, of which 19.9% is GC assist, i.e. request goroutines doing garbage-collection work because they allocate faster than the collector runs.
+2. **Socket syscalls: 16.6% in `Syscall6`**; `net.Conn.Write` is 12.1% and `net.Conn.Read` 10.3%. Each proxied request is two reads and two writes, one pair per hop.
+3. **Header copying: 6.3% in `copyHeader`**, with 6.0% in map growth (`growToSmall` / `newGroups`) from building a fresh `http.Header` map per request and response.
+4. **Request parsing and response finishing in `net/http`: 7.9% in `readRequest`, 8.8% in `finishRequest`**.
+5. **Upstream round trip and body copy: 7.9% in `Transport.RoundTrip`, 7.0% in `copyResponse`** (the `copyBuffer` path).
+
+Reducing 1 and 3 (a pooled copy buffer via `ReverseProxy.BufferPool`, fewer header allocations) is the most promising next step. nginx avoids most of this work by not allocating per request, which falcon, built on `net/http`, can only approach.
+
+### Profiling falcon
+
+pprof is **off by default**. Set `enablePprof = true` under `[core]` to serve `/debug/pprof/` on the management API port (`core.apiport`) only, never on the proxy port. It exposes process internals, so keep the management port private. Management API responses time out after 15 s, so use a profile length under that:
+
+```bash
+go tool pprof -top "http://127.0.0.1:9900/debug/pprof/profile?seconds=10"
+```
 
 Reproduce:
 
@@ -90,6 +129,7 @@ See [`bin/config/config.toml`](bin/config/config.toml) and the [TOML](https://to
 | `core.listen` | Proxy listen port (default 80) |
 | `core.apiport` | Management API port (default 9900) |
 | `core.enableServerStats` | Track in-flight requests; exposes `GET /apiStatus/reqCount` |
+| `core.enablePprof` | Serve `/debug/pprof/` on the management port (default false) |
 | `core.healthIntervalMs` / `healthTimeoutMs` | Active health-check cadence |
 | `limitReq.enable` / `interval` / `frequency` | Per-IP+path rate limit window (ms) and max requests |
 | `proxy.routes[].match` | `0` exact, `1` prefix, `2` regex |
