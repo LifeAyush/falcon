@@ -2,6 +2,7 @@
 listen = 8000
 apiport = 9900
 enableServerStats = true
+# enablePprof = false
 healthIntervalMs = 3000
 healthTimeoutMs = 1000
 

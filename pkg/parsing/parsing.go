@@ -22,6 +22,7 @@ type Core struct {
 	WriteTimeout      int  `toml:"writeTimeout"`
 	IdleTimeout       int  `toml:"idleTimeout"`
 	EnableServerStats bool `toml:"enableServerStats"`
+	EnablePprof       bool `toml:"enablePprof"`
 	HealthIntervalMs  int  `toml:"healthIntervalMs"`
 	HealthTimeoutMs   int  `toml:"healthTimeoutMs"`
 }
